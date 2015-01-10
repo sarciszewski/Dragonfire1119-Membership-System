@@ -1,29 +1,35 @@
 <?php
 
 # Cache Cookie - (C) 2011 Frank Denis - Public domain
-
-define('CACHE_COOKIE_NAME', 'cache');
-define('CACHE_COOKIE_SECRET_KEY', '<change this>');
-define('CACHE_COOKIE_DIGEST_METHOD', 'md5');
-define('CACHE_COOKIE_DURATION', 30 * 60);
+# Modified BCA
 
 class CacheCookie {
+    static var $config;
+    
+    static function init($config)
+    {
+      self::$config = $config;
+    }
+    
     static function set($key, $value, $lifetime) {
+        global $__wicked;
+        $config = $__wicked['modules']['cookie_session'];
+        
         $cookie_content = self::_fetch_cookie_content();
         $now = time();
         $cookie_content->{$key} = array('value' => $value,
                                         'expires_at' => $now + $lifetime);
         $cookie_json = json_encode($cookie_content);
-        $cookie = hash_hmac(CACHE_COOKIE_DIGEST_METHOD, $cookie_json,
-                            CACHE_COOKIE_SECRET_KEY) . '|' . $cookie_json;
-        self::_wipe_previous_cookie(CACHE_COOKIE_NAME);
-        setcookie(CACHE_COOKIE_NAME, $cookie, $now + CACHE_COOKIE_DURATION,
-                  COOKIES_PATH, COOKIES_DOMAIN, FALSE, TRUE);
-        $_COOKIE[CACHE_COOKIE_NAME] = $cookie;
+        $cookie = hash_hmac(self::$config['digest_method'], $cookie_json,
+                            self::$config['secret_key']) . '|' . $cookie_json;
+        self::_wipe_previous_cookie(self::$config['name']);
+        setcookie(self::$config['name'], $cookie, $now + self::$config['ttl'],
+                  self::$config['path'], self::$config['domain'], FALSE, TRUE);
+        $_COOKIE[self::$config['name']] = $cookie;
 
         return TRUE;
     }
-
+    
     static function get($key) {
         $cookie_content = self::_fetch_cookie_content();
         if (!isset($cookie_content->{$key})) {
@@ -34,34 +40,40 @@ class CacheCookie {
             !isset($entry->expires_at) ||
             !is_numeric($entry->expires_at) || time() > $entry->expires_at) {
             self::delete($key);
-
+            
             return NULL;
         }
         return $entry->value;
     }
-
+    
     static function delete($key) {
+        global $__wicked;
+        $config = $__wicked['modules']['cookie_session'];
+
         $cookie_content = self::_fetch_cookie_content();
         $key_existed = isset($cookie_content->{$key});
         unset($cookie_content->{$key});
         $cookie_json = json_encode($cookie_content);
-        $cookie = hash_hmac(CACHE_COOKIE_DIGEST_METHOD, $cookie_json,
-                            CACHE_COOKIE_SECRET_KEY) . '|' . $cookie_json;
-        self::_wipe_previous_cookie(CACHE_COOKIE_NAME);
-        setcookie(CACHE_COOKIE_NAME, $cookie, time() + CACHE_COOKIE_DURATION,
-                  COOKIES_PATH, COOKIES_DOMAIN, FALSE, TRUE);
-        $_COOKIE[CACHE_COOKIE_NAME] = $cookie;
-
+        $cookie = hash_hmac(self::$config['digest_method'], $cookie_json,
+                            self::$config['secret_key']) . '|' . $cookie_json;
+        self::_wipe_previous_cookie(self::$config['name']);
+        setcookie(self::$config['name'], $cookie, time() + self::$config['ttl'],
+                  self::$config['path'], self::$config['domain'], FALSE, TRUE);
+        $_COOKIE[self::$config['name']] = $cookie;        
+        
         return $key_existed;
     }
-
+    
     static function delete_all() {
-        self::_wipe_previous_cookie(CACHE_COOKIE_NAME);
-        setcookie(CACHE_COOKIE_NAME, '', 1, COOKIES_PATH, COOKIES_DOMAIN,
-                  FALSE, TRUE);
-        unset($_COOKIE[CACHE_COOKIE_NAME]);
-    }
+        global $__wicked;
+        $config = $__wicked['modules']['cookie_session'];
 
+        self::_wipe_previous_cookie(self::$config['name']);
+        setcookie(self::$config['name'], '', 1, self::$config['path'], self::$config['domain'],
+                  FALSE, TRUE);
+        unset($_COOKIE[self::$config['name']]);
+    }
+    
     protected static function _wipe_previous_cookie($cookie_name) {
         $headers = headers_list();
         header_remove();
@@ -72,19 +84,19 @@ class CacheCookie {
             }
         }
     }
-
+    
     protected static function _fetch_cookie_content() {
         $cookie = NULL;
-        if (!empty($_COOKIE[CACHE_COOKIE_NAME])) {
-            $cookie = $_COOKIE[CACHE_COOKIE_NAME];
+        if (!empty($_COOKIE[self::$config['name']])) {
+            $cookie = $_COOKIE[self::$config['name']];
         }
         if (empty($cookie)) {
             $cookie_content = new \stdClass();
         } else {
             @list($digest, $cookie_json) = explode('|', $cookie, 2);
             if (empty($digest) || empty($cookie_json) ||
-                $digest !== hash_hmac(CACHE_COOKIE_DIGEST_METHOD, $cookie_json,
-                                      CACHE_COOKIE_SECRET_KEY)) {
+                !self::hash_equals($digest, hash_hmac(self::$config['digest_method'], $cookie_json,
+                                      self::$config['secret_key'])) {
                 $cookie_content = new \stdClass();
             } else {
                 $cookie_content = @json_decode($cookie_json);
@@ -94,5 +106,30 @@ class CacheCookie {
             $cookie_content = new \stdClass();
         }
         return $cookie_content;
+    }
+    
+
+    /**
+     * Prevent timing attack
+     * 
+     * @param  string $knownString
+     * @param  string $userString
+     * @return bool
+     */
+    public static function hash_equals($knownString, $userString)
+    {
+        if (function_exists('\hash_equals')) {
+            return \hash_equals($knownString, $userString);
+        }
+        if (strlen($knownString) !== strlen($userString)) {
+            return false;
+        }
+        $len = strlen($knownString);
+        $result = 0;
+        for ($i = 0; $i < $len; $i++) {
+            $result |= (ord($knownString[$i]) ^ ord($userString[$i]));
+        }
+        // They are only identical strings if $result is exactly 0...
+        return 0 === $result;
     }
 }
